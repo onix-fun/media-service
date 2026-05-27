@@ -1,4 +1,10 @@
-.PHONY: build run swagger docker-up docker-down migrate-up migrate-down dev
+.PHONY: build run swagger docker-up docker-down migrate-up migrate-down dev test
+
+# Load .env file if it exists
+ifneq (,$(wildcard ./.env))
+    include .env
+    export
+endif
 
 DATABASE_URL ?= postgres://postgres:password@localhost:5432/media?sslmode=disable
 

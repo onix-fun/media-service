@@ -21,16 +21,20 @@ type Service interface {
 }
 
 type service struct {
-	metadata storage.MetadataRepo
-	storage  storage.BlobStorage
-	hashChan chan<- uuid.UUID // Channel to send completed sessions for async hashing
+	metadata               storage.MetadataRepo
+	storage                storage.BlobStorage
+	hashChan               chan<- uuid.UUID
+	presignedUploadExpiry  time.Duration
+	presignedDownloadExpiry time.Duration
 }
 
-func NewService(metadata storage.MetadataRepo, s storage.BlobStorage, hashChan chan<- uuid.UUID) Service {
+func NewService(metadata storage.MetadataRepo, s storage.BlobStorage, hashChan chan<- uuid.UUID, presignedUploadExpiry, presignedDownloadExpiry time.Duration) Service {
 	return &service{
-		metadata: metadata,
-		storage:  s,
-		hashChan: hashChan,
+		metadata:                metadata,
+		storage:                 s,
+		hashChan:                hashChan,
+		presignedUploadExpiry:   presignedUploadExpiry,
+		presignedDownloadExpiry: presignedDownloadExpiry,
 	}
 }
 
@@ -49,7 +53,7 @@ func (s *service) InitUpload(ctx context.Context, mimeType string, expectedSize 
 	}
 
 	// 2. Generate Presigned URLs
-	expiry := 24 * time.Hour
+	expiry := s.presignedUploadExpiry
 	presignedURLs := make(map[int]string)
 	for i := 1; i <= partsCount; i++ {
 		url, err := s.storage.GeneratePresignedPartURL(ctx, tempKey, uploadID, i, expiry)
@@ -155,8 +159,7 @@ func (s *service) GetDownloadURL(ctx context.Context, blobID uuid.UUID) (string,
 	hashStr := *blob.SHA256
 	canonicalKey := fmt.Sprintf("blobs/%s/%s/%s", hashStr[:2], hashStr[2:4], hashStr)
 
-	// Presigned URL valid for 1 hour
-	url, err := s.storage.GetPresignedDownloadURL(ctx, canonicalKey, time.Hour)
+	url, err := s.storage.GetPresignedDownloadURL(ctx, canonicalKey, s.presignedDownloadExpiry)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned url: %w", err)
 	}

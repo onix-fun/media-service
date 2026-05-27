@@ -18,6 +18,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	minioClient "github.com/minio/minio-go/v7"
@@ -38,14 +41,50 @@ import (
 
 // @host localhost:8080
 // @BasePath /
+func parseDuration(key string, defaultVal time.Duration) time.Duration {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil {
+		log.Fatalf("Invalid %s: %q — expected duration (e.g. 10m, 24h): %v", key, val, err)
+	}
+	return d
+}
+
 func main() {
 	ctx := context.Background()
+
+	// App settings
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
 	// 1. Initialize PostgreSQL
 	dbUrl := os.Getenv("DATABASE_URL")
 	if dbUrl == "" {
 		dbUrl = "postgres://postgres:password@localhost:5432/media?sslmode=disable"
 	}
+
+	// 0. Run Migrations automatically if enabled
+	autoMigrate := os.Getenv("AUTO_MIGRATE")
+	if autoMigrate == "" || autoMigrate == "true" {
+		migrationPath := os.Getenv("MIGRATION_PATH")
+		if migrationPath == "" {
+			migrationPath = "file://migrations"
+		}
+		m, err := migrate.New(migrationPath, dbUrl)
+		if err != nil {
+			log.Fatalf("Failed to initialize migrator: %v", err)
+		}
+		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+			log.Fatalf("Failed to apply migrations: %v", err)
+		}
+		log.Println("Migrations applied successfully!")
+	}
+
 	pool, err := pgxpool.New(ctx, dbUrl)
 	if err != nil {
 		log.Fatalf("Failed to connect to postgres: %v", err)
@@ -53,38 +92,49 @@ func main() {
 	defer pool.Close()
 	metadataRepo := postgres.NewMetadataRepo(pool)
 
-	// 2. Initialize MinIO
-	endpoint := os.Getenv("MINIO_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "localhost:9010"
+	// 2. Initialize MinIO / S3 Storage
+	s3Endpoint := os.Getenv("S3_ENDPOINT")
+	if s3Endpoint == "" {
+		s3Endpoint = "localhost:9010"
 	}
-	minioUser := os.Getenv("MINIO_ROOT_USER")
-	if minioUser == "" {
-		minioUser = "minioadmin"
+	s3AccessKey := os.Getenv("S3_ACCESS_KEY")
+	if s3AccessKey == "" {
+		s3AccessKey = "minioadmin"
 	}
-	minioPass := os.Getenv("MINIO_ROOT_PASSWORD")
-	if minioPass == "" {
-		minioPass = "minioadmin"
+	s3SecretKey := os.Getenv("S3_SECRET_KEY")
+	if s3SecretKey == "" {
+		s3SecretKey = "minioadmin"
 	}
+	s3Bucket := os.Getenv("S3_BUCKET")
+	if s3Bucket == "" {
+		s3Bucket = "media-blobs"
+	}
+	s3Region := os.Getenv("S3_REGION")
+	s3UseSSL := os.Getenv("S3_USE_SSL") == "true"
 
-	mc, err := minioClient.New(endpoint, &minioClient.Options{
-		Creds:  credentials.NewStaticV4(minioUser, minioPass, ""),
-		Secure: false,
+	mc, err := minioClient.New(s3Endpoint, &minioClient.Options{
+		Creds:  credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
+		Secure: s3UseSSL,
+		Region: s3Region,
 	})
 	if err != nil {
-		log.Fatalf("Failed to initialize minio client: %v", err)
+		log.Fatalf("Failed to initialize S3 client: %v", err)
 	}
-	blobStorage := minio.NewBlobStorage(mc, "media-blobs")
+	blobStorage := minio.NewBlobStorage(mc, s3Bucket)
 
 	// 3. Setup Async Hashing Worker
-	hashChan := make(chan uuid.UUID, 100) // Buffer 100 jobs
+	hashBufferSize := 100
+	gcInterval := parseDuration("GC_SWEEP_INTERVAL", 10*time.Minute)
+	gcGracePeriod := parseDuration("GC_GRACE_PERIOD", 24*time.Hour)
+	presignedUploadExpiry := parseDuration("PRESIGNED_UPLOAD_EXPIRY", 24*time.Hour)
+	presignedDownloadExpiry := parseDuration("PRESIGNED_DOWNLOAD_EXPIRY", 1*time.Hour)
+
+	hashChan := make(chan uuid.UUID, hashBufferSize)
 	hashWorker := worker.NewHashWorker(metadataRepo, blobStorage, hashChan)
 	go hashWorker.Start(ctx)
 
 	// 4. Setup GC Worker
-	// In production, intervals should be longer (e.g. 1 hour interval, 24 hours grace)
-	// Using short times here for demonstration
-	gcWorker := gc.NewWorker(metadataRepo, blobStorage, 10*time.Minute, 24*time.Hour)
+	gcWorker := gc.NewWorker(metadataRepo, blobStorage, gcInterval, gcGracePeriod)
 	go gcWorker.Start(ctx)
 
 	// 5. Setup Processing Service (Skeleton)
@@ -92,7 +142,7 @@ func main() {
 	_ = processingSvc // Ready to be injected into future handlers or event listeners
 
 	// 6. Setup Upload Service & API
-	uploadSvc := upload.NewService(metadataRepo, blobStorage, hashChan)
+	uploadSvc := upload.NewService(metadataRepo, blobStorage, hashChan, presignedUploadExpiry, presignedDownloadExpiry)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -103,14 +153,16 @@ func main() {
 
 	r.Mount("/", apiRouter)
 
-	// Swagger documentation endpoint
-	r.Get("/swagger/*", httpSwagger.Handler(
-		httpSwagger.URL("/swagger/doc.json"),
-	))
+	// Swagger documentation endpoint (only if not in PROD)
+	if os.Getenv("ENV") != "production" {
+		r.Get("/swagger/*", httpSwagger.Handler(
+			httpSwagger.URL("/swagger/doc.json"),
+		))
+		log.Printf("Swagger docs available at http://localhost:%s/swagger/index.html\n", port)
+	}
 
-	log.Println("Media Service starting on :8080...")
-	log.Println("Swagger docs available at http://localhost:8080/swagger/index.html")
-	if err := http.ListenAndServe(":8080", r); err != nil {
+	log.Printf("Media Service starting on :%s...\n", port)
+	if err := http.ListenAndServe(":"+port, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
