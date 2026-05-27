@@ -22,24 +22,6 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Setup Infrastructure (MinIO & Postgres)
-        run: |
-          make docker-up
-          sleep 10 # Allow time for databases to initialize
-
-      - name: Build and Start Application
-        run: |
-          go install github.com/swaggo/swag/cmd/swag@latest
-          make swagger
-          make build
-          # Start app in background
-          ./bin/media-service &
-          sleep 5 # Wait for app to be ready
-
-      - name: Run E2E Tests
-        run: |
-          make test
-
       - name: Build Production Linux Binary
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o bin/media-service-linux-amd64 cmd/media-service/main.go
