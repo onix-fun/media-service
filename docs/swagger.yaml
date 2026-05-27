@@ -1,0 +1,180 @@
+basePath: /
+definitions:
+  internal_api.CompleteUploadRequest:
+    properties:
+      parts:
+        items:
+          $ref: '#/definitions/internal_api.UploadPartReq'
+        type: array
+    type: object
+  internal_api.InitUploadRequest:
+    properties:
+      expectedSize:
+        type: integer
+      mimeType:
+        type: string
+      partsCount:
+        type: integer
+    type: object
+  internal_api.InitUploadResponse:
+    properties:
+      expiresAt:
+        type: string
+      parts:
+        additionalProperties:
+          type: string
+        description: map of PartNumber to Presigned URL
+        type: object
+      sessionId:
+        type: string
+    type: object
+  internal_api.UploadPartReq:
+    properties:
+      etag:
+        type: string
+      partNumber:
+        type: integer
+    type: object
+  internal_api.UploadSessionResponse:
+    properties:
+      blobId:
+        type: string
+      sessionId:
+        type: string
+      status:
+        $ref: '#/definitions/media-service_internal_domain.SessionStatus'
+    type: object
+  media-service_internal_domain.SessionStatus:
+    enum:
+    - UPLOADING
+    - FINALIZING
+    - COMPLETED
+    - ABANDONED
+    type: string
+    x-enum-varnames:
+    - SessionUploading
+    - SessionFinalizing
+    - SessionCompleted
+    - SessionAbandoned
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+  description: Internal platform service for handling blob lifecycles, multipart uploads,
+    and processing orchestration.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Media Service Control Plane API
+  version: "1.0"
+paths:
+  /blobs/{blobId}:
+    delete:
+      description: Synchronously deletes a blob from S3 and its metadata from the
+        database. Typically used for administrative actions, DMCA, or GDPR purges.
+      parameters:
+      - description: Blob ID
+        in: path
+        name: blobId
+        required: true
+        type: string
+      responses:
+        "204":
+          description: Accepted / Deleted
+      summary: Force deletes a blob
+      tags:
+      - blobs
+  /blobs/{blobId}/download-url:
+    get:
+      description: Returns a direct S3 presigned URL for downloading the blob (Control
+        Plane approach)
+      parameters:
+      - description: Blob ID
+        in: path
+        name: blobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: '{"url": "https://..."}'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Gets a presigned download URL
+      tags:
+      - blobs
+  /uploads/{sessionId}:
+    get:
+      description: Returns the current status of the upload session and the resulting
+        blobId if completed.
+      parameters:
+      - description: Upload Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.UploadSessionResponse'
+      summary: Gets the status of an upload session
+      tags:
+      - uploads
+  /uploads/{sessionId}/complete:
+    post:
+      consumes:
+      - application/json
+      description: Validates parts, completes the S3 multipart upload, and triggers
+        the async hashing pipeline
+      parameters:
+      - description: Upload Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      - description: Uploaded Parts with ETags
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.CompleteUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted - Processing started
+      summary: Completes a multipart upload
+      tags:
+      - uploads
+  /uploads/init:
+    post:
+      consumes:
+      - application/json
+      description: Creates an S3 multipart upload session and returns presigned URLs
+        for direct client-to-S3 upload
+      parameters:
+      - description: Upload Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.InitUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.InitUploadResponse'
+      summary: Initializes a multipart upload
+      tags:
+      - uploads
+swagger: "2.0"
