@@ -15,18 +15,6 @@ services:
       timeout: 5s
       retries: 5
 
-  migrate:
-    image: migrate/migrate:v4.16.2
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - ./migrations:/migrations
-    command:
-      - -path=/migrations
-      - -database=postgres://postgres:password@postgres:5432/media?sslmode=disable
-      - up
-
   minio:
     image: minio/minio:RELEASE.2024-05-10T01-41-38Z
     environment:
