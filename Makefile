@@ -8,14 +8,15 @@ endif
 
 DATABASE_URL ?= postgres://postgres:password@localhost:5432/media?sslmode=disable
 
-build:
+build: swagger
 	go build -o bin/media-service cmd/media-service/main.go
 
 run: build
 	./bin/media-service
 
 swagger:
-	go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/media-service/main.go --parseDependency --parseInternal
+	go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/media-service/main.go --parseDependency --parseInternal -o docs
+	cp docs/swagger.json docs/openapi.json
 
 docker-up:
 	docker-compose up -d
