@@ -28,6 +28,7 @@ type MetadataRepo interface {
 	// GC Methods
 	GetOrphanedBlobs(ctx context.Context, gracePeriod time.Duration) ([]*domain.Blob, error)
 	DeleteBlobRecord(ctx context.Context, id uuid.UUID) error
+	GetExpiredSessions(ctx context.Context) ([]*domain.UploadSession, error)
 
 	// Processing DAG Methods
 	CreateBlobRelation(ctx context.Context, sourceID, targetID uuid.UUID, relationType string) error

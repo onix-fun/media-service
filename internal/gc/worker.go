@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"media-service/internal/domain"
 	"media-service/internal/storage"
 )
 
@@ -37,6 +38,28 @@ func (w *Worker) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			w.runSweep(ctx)
+			w.cleanupExpiredSessions(ctx)
+		}
+	}
+}
+
+func (w *Worker) cleanupExpiredSessions(ctx context.Context) {
+	sessions, err := w.metadata.GetExpiredSessions(ctx)
+	if err != nil {
+		log.Printf("GC Worker error fetching expired sessions: %v", err)
+		return
+	}
+	if len(sessions) == 0 {
+		return
+	}
+	log.Printf("GC Worker: Found %d expired upload sessions to clean up.", len(sessions))
+	for _, s := range sessions {
+		if err := w.blobStorage.AbortMultipartUpload(ctx, s.ObjectKey, s.MultipartUploadID); err != nil {
+			log.Printf("GC Worker warning: failed to abort multipart upload %s for session %s: %v", s.MultipartUploadID, s.ID, err)
+		}
+		s.Status = domain.SessionAbandoned
+		if err := w.metadata.UpdateUploadSession(ctx, s); err != nil {
+			log.Printf("GC Worker error updating session %s: %v", s.ID, err)
 		}
 	}
 }

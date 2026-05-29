@@ -216,6 +216,30 @@ func (r *metadataRepo) DeleteBlobRecord(ctx context.Context, id uuid.UUID) error
 	return tx.Commit(ctx)
 }
 
+func (r *metadataRepo) GetExpiredSessions(ctx context.Context) ([]*domain.UploadSession, error) {
+	query := `
+		SELECT id, multipart_upload_id, object_key, blob_id, expected_size, mime_type, status, created_by_service, created_at, expires_at
+		FROM upload_sessions
+		WHERE status = 'UPLOADING'
+		  AND expires_at < NOW()
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*domain.UploadSession
+	for rows.Next() {
+		s := &domain.UploadSession{}
+		if err := rows.Scan(&s.ID, &s.MultipartUploadID, &s.ObjectKey, &s.BlobID, &s.ExpectedSize, &s.MimeType, &s.Status, &s.CreatedByService, &s.CreatedAt, &s.ExpiresAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
 func (r *metadataRepo) CreateBlobRelation(ctx context.Context, sourceID, targetID uuid.UUID, relationType string) error {
 	query := `
 		INSERT INTO blob_relations (source_blob_id, target_blob_id, relation_type)

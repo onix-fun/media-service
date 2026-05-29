@@ -128,6 +128,21 @@ paths:
       summary: Gets the status of an upload session
       tags:
       - uploads
+  /uploads/{sessionId}/cancel:
+    post:
+      description: Aborts the S3 multipart upload and marks the session as ABANDONED
+      parameters:
+      - description: Upload Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      responses:
+        "200":
+          description: Cancelled
+      summary: Cancels an upload session
+      tags:
+      - uploads
   /uploads/{sessionId}/complete:
     post:
       consumes:

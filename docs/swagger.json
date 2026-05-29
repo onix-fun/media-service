@@ -135,6 +135,29 @@
                 }
             }
         },
+        "/uploads/{sessionId}/cancel": {
+            "post": {
+                "description": "Aborts the S3 multipart upload and marks the session as ABANDONED",
+                "tags": [
+                    "uploads"
+                ],
+                "summary": "Cancels an upload session",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Upload Session ID",
+                        "name": "sessionId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Cancelled"
+                    }
+                }
+            }
+        },
         "/uploads/{sessionId}/complete": {
             "post": {
                 "description": "Validates parts, completes the S3 multipart upload, and triggers the async hashing pipeline",

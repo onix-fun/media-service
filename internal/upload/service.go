@@ -15,6 +15,7 @@ import (
 type Service interface {
 	InitUpload(ctx context.Context, mimeType string, expectedSize *int64, partsCount int, createdBy string) (*domain.UploadSession, map[int]string, error)
 	CompleteUpload(ctx context.Context, sessionID uuid.UUID, parts []domain.UploadPart) error
+	CancelUpload(ctx context.Context, sessionID uuid.UUID) error
 	GetSession(ctx context.Context, sessionID uuid.UUID) (*domain.UploadSession, error)
 	GetDownloadURL(ctx context.Context, blobID uuid.UUID) (string, error)
 	DeleteBlob(ctx context.Context, blobID uuid.UUID) error
@@ -135,6 +136,30 @@ func (s *service) CompleteUpload(ctx context.Context, sessionID uuid.UUID, parts
 	default:
 		// Queue is full - this should ideally be persistent (e.g. NATS)
 		// For the sake of the initial version, we use an in-memory channel.
+	}
+
+	return nil
+}
+
+func (s *service) CancelUpload(ctx context.Context, sessionID uuid.UUID) error {
+	session, err := s.metadata.GetUploadSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+	if session == nil {
+		return fmt.Errorf("session not found")
+	}
+	if session.Status != domain.SessionUploading {
+		return fmt.Errorf("cannot cancel session in status: %s", session.Status)
+	}
+
+	if err := s.storage.AbortMultipartUpload(ctx, session.ObjectKey, session.MultipartUploadID); err != nil {
+		return fmt.Errorf("failed to abort S3 multipart upload: %w", err)
+	}
+
+	session.Status = domain.SessionAbandoned
+	if err := s.metadata.UpdateUploadSession(ctx, session); err != nil {
+		return fmt.Errorf("failed to update session status: %w", err)
 	}
 
 	return nil

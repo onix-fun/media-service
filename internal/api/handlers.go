@@ -54,6 +54,7 @@ func NewRouter(h *Handlers) *chi.Mux {
 	r.Route("/uploads", func(r chi.Router) {
 		r.Post("/init", h.InitUpload)
 		r.Post("/{sessionId}/complete", h.CompleteUpload)
+		r.Post("/{sessionId}/cancel", h.CancelUpload)
 		r.Get("/{sessionId}", h.GetUploadSession)
 	})
 
@@ -154,6 +155,34 @@ func (h *Handlers) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"message": "Upload completed, async hashing started"}`))
+}
+
+// CancelUpload godoc
+// @Summary Cancels an upload session
+// @Description Aborts the S3 multipart upload and marks the session as ABANDONED
+// @Tags uploads
+// @Param sessionId path string true "Upload Session ID"
+// @Success 200 "Cancelled"
+// @Router /uploads/{sessionId}/cancel [post]
+func (h *Handlers) CancelUpload(w http.ResponseWriter, r *http.Request) {
+	sessionIDStr := chi.URLParam(r, "sessionId")
+	sessionID, err := uuid.Parse(sessionIDStr)
+	if err != nil {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.uploadService.CancelUpload(r.Context(), sessionID); err != nil {
+		if err.Error() == "session not found" {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message": "Upload cancelled"}`))
 }
 
 // GetDownloadURL godoc
