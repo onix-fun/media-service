@@ -1,0 +1,50 @@
+# Binaries and build outputs
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go workspace
+vendor/
+go.work
+go.work.sum
+
+# Auto-generated OpenAPI / Swagger docs
+/docs/
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+coverage.out
+c.out
+
+# Docker/Local volumes (if any local bind mounts are used in the future)
+/data/
+/postgres-data/
+/minio-data/
