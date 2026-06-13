@@ -72,6 +72,15 @@ func NewRouter(h *Handlers, internalAuthSecret string) *chi.Mux {
 	return r
 }
 
+// StartProcessing godoc
+// @Summary Manually triggers a processing profile for a blob
+// @Description Queues a processing task (e.g., thumbnail generation) for an existing blob.
+// @Tags blobs
+// @Param blobId path string true "Blob ID"
+// @Param profile path string true "Profile Name (e.g., thumbnail, preview)"
+// @Success 202 "Accepted"
+// @Security ApiKeyAuth
+// @Router /blobs/{blobId}/processing/{profile} [post]
 func (h *Handlers) StartProcessing(w http.ResponseWriter, r *http.Request) {
 	blobID, err := uuid.Parse(chi.URLParam(r, "blobId"))
 	if err != nil {
@@ -90,6 +99,16 @@ type ReferenceRequest struct {
 	ReferenceID   string `json:"reference_id"`
 }
 
+// CreateReference godoc
+// @Summary Links a blob to an external entity
+// @Description Registers a reference (e.g., "post:123") to prevent the blob from being garbage collected.
+// @Tags blobs
+// @Accept json
+// @Param blobId path string true "Blob ID"
+// @Param request body ReferenceRequest true "Reference Details"
+// @Success 204 "Created"
+// @Security ApiKeyAuth
+// @Router /blobs/{blobId}/references [post]
 func (h *Handlers) CreateReference(w http.ResponseWriter, r *http.Request) {
 	blobID, err := uuid.Parse(chi.URLParam(r, "blobId"))
 	if err != nil {
@@ -108,6 +127,16 @@ func (h *Handlers) CreateReference(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// DeleteReference godoc
+// @Summary Removes a link between a blob and an external entity
+// @Description Unregisters a reference. If no references remain, the blob may be eventually garbage collected.
+// @Tags blobs
+// @Param blobId path string true "Blob ID"
+// @Param referenceType path string true "Reference Type"
+// @Param referenceId path string true "Reference ID"
+// @Success 204 "Deleted"
+// @Security ApiKeyAuth
+// @Router /blobs/{blobId}/references/{referenceType}/{referenceId} [delete]
 func (h *Handlers) DeleteReference(w http.ResponseWriter, r *http.Request) {
 	blobID, err := uuid.Parse(chi.URLParam(r, "blobId"))
 	if err != nil {

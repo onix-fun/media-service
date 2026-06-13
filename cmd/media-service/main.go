@@ -80,6 +80,25 @@ func contains(values []string, target string) bool {
 	return false
 }
 
+// @title Media Service API
+// @version 1.0
+// @description Microservice for handling media uploads, processing (thumbnails/previews), and storage (S3).
+// @termsOfService http://swagger.io/terms/
+
+// @contact.name API Support
+// @contact.url http://www.swagger.io/support
+// @contact.email support@swagger.io
+
+// @license.name MIT
+// @license.url https://opensource.org/licenses/MIT
+
+// @host localhost:8080
+// @BasePath /v1
+
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name Authorization
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	if len(os.Args) < 2 {
