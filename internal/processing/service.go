@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"media-service/internal/storage"
+	"github.com/onix-fun/media-service/internal/storage"
 
 	"github.com/google/uuid"
 )

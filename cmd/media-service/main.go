@@ -1,26 +1,17 @@
-//go:generate go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/media-service/main.go --parseDependency --parseInternal -o docs
-
 package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"media-service/internal/api"
-	"media-service/internal/gc"
-	"media-service/internal/processing"
-	"media-service/internal/storage/minio"
-	"media-service/internal/storage/postgres"
-	"media-service/internal/upload"
-	"media-service/internal/worker"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -28,183 +19,173 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	minioClient "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	httpSwagger "github.com/swaggo/http-swagger/v2"
+	"github.com/onix-fun/media-service/internal/api"
+	"github.com/onix-fun/media-service/internal/config"
+	"github.com/onix-fun/media-service/internal/gc"
+	"github.com/onix-fun/media-service/internal/jobs"
+	"github.com/onix-fun/media-service/internal/storage"
+	"github.com/onix-fun/media-service/internal/storage/minio"
+	"github.com/onix-fun/media-service/internal/storage/postgres"
+	"github.com/onix-fun/media-service/internal/upload"
+	"github.com/onix-fun/media-service/internal/worker"
 )
 
-// @title Media Service Control Plane API
-// @version 1.0
-// @description Internal platform service for handling blob lifecycles, multipart uploads, and processing orchestration.
-// @termsOfService http://swagger.io/terms/
+type jobHandler struct {
+	hash       *worker.HashWorker
+	profiles   *worker.ProfileWorker
+	metadata   storage.MetadataRepo
+	queue      *jobs.Rabbit
+	configured map[string]config.Profile
+}
 
-// @contact.name API Support
-// @contact.email support@swagger.io
-
-// @license.name Apache 2.0
-// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
-
-// @host localhost:8080
-// @BasePath /
-func parseDuration(key string, defaultVal time.Duration) time.Duration {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultVal
+func (h jobHandler) HandleJob(ctx context.Context, job jobs.Job) error {
+	switch job.Type {
+	case "hash":
+		id, err := uuid.Parse(job.SessionID)
+		if err != nil {
+			return err
+		}
+		if err := h.hash.ProcessSession(ctx, id); err != nil {
+			return err
+		}
+		session, err := h.metadata.GetUploadSession(ctx, id)
+		if err != nil || session == nil || session.BlobID == nil {
+			return err
+		}
+		for name, profile := range h.configured {
+			if profile.Automatic && (len(profile.MIME) == 0 || contains(profile.MIME, session.MimeType)) {
+				if err := h.queue.PublishProcess(ctx, *session.BlobID, name); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	case "process":
+		id, err := uuid.Parse(job.BlobID)
+		if err != nil {
+			return err
+		}
+		return h.profiles.Process(ctx, id, job.Profile)
+	default:
+		return fmt.Errorf("unknown job type %q", job.Type)
 	}
-	d, err := time.ParseDuration(val)
-	if err != nil {
-		log.Fatalf("Invalid %s: %q — expected duration (e.g. 10m, 24h): %v", key, val, err)
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
 	}
-	return d
+	return false
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// App settings
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) < 2 {
+		log.Error("usage: media-service <serve|config>")
+		os.Exit(2)
 	}
-
-	// 1. Initialize PostgreSQL
-	dbUrl := os.Getenv("DATABASE_URL")
-	if dbUrl == "" {
-		dbUrl = "postgres://postgres:password@localhost:5432/media?sslmode=disable"
+	if os.Args[1] == "config" && (len(os.Args) < 3 || os.Args[2] != "validate") {
+		log.Error("usage: media-service config validate --config=<path>")
+		os.Exit(2)
 	}
-
-	// 0. Run Migrations automatically if enabled
-	autoMigrate := os.Getenv("AUTO_MIGRATE")
-	if autoMigrate == "" || autoMigrate == "true" {
-		migrationPath := os.Getenv("MIGRATION_PATH")
-		if migrationPath == "" {
-			migrationPath = "file://migrations"
-		}
-		m, err := migrate.New(migrationPath, dbUrl)
-		if err != nil {
-			log.Fatalf("Failed to initialize migrator: %v", err)
-		}
-		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-			log.Fatalf("Failed to apply migrations: %v", err)
-		}
-		log.Println("Migrations applied successfully!")
+	fs := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
+	path := fs.String("config", "config/config.example.yaml", "YAML config")
+	role := fs.String("role", "all", "api, worker or all")
+	flagArgs := os.Args[2:]
+	if os.Args[1] == "config" {
+		flagArgs = os.Args[3:]
 	}
-
-	pool, err := pgxpool.New(ctx, dbUrl)
+	_ = fs.Parse(flagArgs)
+	cfg, err := config.Load(*path)
 	if err != nil {
-		log.Fatalf("Failed to connect to postgres: %v", err)
+		log.Error("invalid config", "error", err)
+		os.Exit(1)
+	}
+	if os.Args[1] == "config" {
+		log.Info("config is valid")
+		return
+	}
+	if os.Args[1] != "serve" {
+		log.Error("unknown command")
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if cfg.Database.AutoMigrate {
+		m, e := migrate.New(cfg.Database.MigrationPath, cfg.Database.URL)
+		if e != nil {
+			log.Error("migrator failed", "error", e)
+			os.Exit(1)
+		}
+		if e = m.Up(); e != nil && !errors.Is(e, migrate.ErrNoChange) {
+			log.Error("migration failed", "error", e)
+			os.Exit(1)
+		}
+	}
+	pool, err := pgxpool.New(ctx, cfg.Database.URL)
+	if err != nil {
+		log.Error("database failed", "error", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
-	metadataRepo := postgres.NewMetadataRepo(pool)
-
-	// 2. Initialize MinIO / S3 Storage
-	s3Endpoint := os.Getenv("S3_ENDPOINT")
-	if s3Endpoint == "" {
-		s3Endpoint = "localhost:9010"
-	}
-	s3AccessKey := os.Getenv("S3_ACCESS_KEY")
-	if s3AccessKey == "" {
-		s3AccessKey = "minioadmin"
-	}
-	s3SecretKey := os.Getenv("S3_SECRET_KEY")
-	if s3SecretKey == "" {
-		s3SecretKey = "minioadmin"
-	}
-	s3Bucket := os.Getenv("S3_BUCKET")
-	if s3Bucket == "" {
-		s3Bucket = "media-blobs"
-	}
-	s3Region := os.Getenv("S3_REGION")
-	if s3Region == "" {
-		s3Region = "us-east-1"
-	}
-	s3UseSSL := os.Getenv("S3_USE_SSL") == "true"
-
-	mc, err := minioClient.New(s3Endpoint, &minioClient.Options{
-		Creds:  credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
-		Secure: s3UseSSL,
-		Region: s3Region,
-	})
+	repo := postgres.NewMetadataRepo(pool)
+	private, err := minioClient.New(cfg.S3.Endpoint, &minioClient.Options{Creds: credentials.NewStaticV4(cfg.S3.AccessKey, cfg.S3.SecretKey, ""), Secure: cfg.S3.UseSSL, Region: cfg.S3.Region})
 	if err != nil {
-		log.Fatalf("Failed to initialize S3 client: %v", err)
+		log.Error("s3 failed", "error", err)
+		os.Exit(1)
 	}
-	s3PublicEndpoint := os.Getenv("S3_PUBLIC_ENDPOINT")
-	if s3PublicEndpoint == "" {
-		s3PublicEndpoint = s3Endpoint
+	publicEndpoint := cfg.S3.PublicEndpoint
+	if publicEndpoint == "" {
+		publicEndpoint = cfg.S3.Endpoint
 	}
-	publicClient, err := minioClient.New(s3PublicEndpoint, &minioClient.Options{
-		Creds:  credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
-		Secure: os.Getenv("S3_PUBLIC_USE_SSL") == "true",
-		Region: s3Region,
-	})
+	public, err := minioClient.New(publicEndpoint, &minioClient.Options{Creds: credentials.NewStaticV4(cfg.S3.AccessKey, cfg.S3.SecretKey, ""), Secure: cfg.S3.PublicUseSSL, Region: cfg.S3.Region})
 	if err != nil {
-		log.Fatalf("Failed to initialize public S3 signing client: %v", err)
+		log.Error("public s3 failed", "error", err)
+		os.Exit(1)
 	}
-	blobStorage := minio.NewBlobStorage(mc, publicClient, s3Bucket)
-
-	// 3. Setup Async Hashing Worker
-	hashBufferSize := 100
-	gcInterval := parseDuration("GC_SWEEP_INTERVAL", 10*time.Minute)
-	gcGracePeriod := parseDuration("GC_GRACE_PERIOD", 24*time.Hour)
-	presignedUploadExpiry := parseDuration("PRESIGNED_UPLOAD_EXPIRY", 24*time.Hour)
-	presignedDownloadExpiry := parseDuration("PRESIGNED_DOWNLOAD_EXPIRY", 1*time.Hour)
-
-	hashChan := make(chan uuid.UUID, hashBufferSize)
-	hashWorker := worker.NewHashWorker(metadataRepo, blobStorage, hashChan)
-	go hashWorker.Start(ctx)
-
-	// 4. Setup GC Worker
-	gcWorker := gc.NewWorker(metadataRepo, blobStorage, gcInterval, gcGracePeriod)
-	go gcWorker.Start(ctx)
-
-	// 5. Setup Processing Service (Skeleton)
-	processingSvc := processing.NewService(metadataRepo)
-	_ = processingSvc // Ready to be injected into future handlers or event listeners
-
-	// 6. Setup Upload Service & API
-	uploadSvc := upload.NewService(metadataRepo, blobStorage, hashChan, presignedUploadExpiry, presignedDownloadExpiry)
-
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Get("/livez", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	h := api.NewHandlers(uploadSvc)
-	internalAuthSecret := os.Getenv("INTERNAL_AUTH_SECRET")
-	if internalAuthSecret == "" {
-		log.Fatal("INTERNAL_AUTH_SECRET is required")
+	blobs := minio.NewBlobStorage(private, public, cfg.S3.Bucket)
+	queue := jobs.New(cfg.RabbitMQ, log)
+	hash := worker.NewHashWorker(repo, blobs, cfg.Scanning)
+	profiles := worker.NewProfileWorker(repo, blobs, cfg.Profiles)
+	errs := make(chan error, 3)
+	if *role == "all" || *role == "worker" {
+		go func() {
+			errs <- queue.Run(ctx, jobHandler{hash: hash, profiles: profiles, metadata: repo, queue: queue, configured: cfg.Profiles})
+		}()
+		go gc.NewWorker(repo, blobs, cfg.GC.Interval, cfg.GC.GracePeriod).Start(ctx)
 	}
-	apiRouter := api.NewRouter(h, internalAuthSecret)
-
-	r.Mount("/", apiRouter)
-
-	// Swagger documentation endpoint (only if not in PROD)
-	if os.Getenv("ENV") != "production" {
-		r.Get("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, "docs/openapi.json")
+	var server *http.Server
+	if *role == "all" || *role == "api" {
+		svc := upload.NewService(repo, blobs, queue, cfg.Uploads.UploadExpiry, cfg.Uploads.DownloadExpiry)
+		mux := http.NewServeMux()
+		mux.Handle("/v1/", http.StripPrefix("/v1", api.NewRouter(api.NewHandlers(svc), cfg.Service.APIKey)))
+		mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+			if pool.Ping(r.Context()) != nil {
+				http.Error(w, "not ready", 503)
+				return
+			}
+			w.WriteHeader(200)
 		})
-		r.Get("/swagger/*", httpSwagger.Handler(
-			httpSwagger.URL("/openapi.json"),
-		))
-		log.Printf("Swagger docs available at http://localhost:%s/swagger/index.html\n", port)
+		mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("media_service_up 1\n")) })
+		server = &http.Server{Addr: cfg.Service.HTTPAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			e := server.ListenAndServe()
+			if !errors.Is(e, http.ErrServerClosed) {
+				errs <- e
+			}
+		}()
 	}
-
-	server := &http.Server{
-		Addr:              ":" + port,
-		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second,
+	select {
+	case <-ctx.Done():
+	case err := <-errs:
+		log.Error("service stopped", "error", err)
 	}
-	go func() {
-		log.Printf("Media Service starting on :%s...\n", port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
-		}
-	}()
-	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP shutdown failed: %v", err)
+	if server != nil {
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdown)
 	}
 }

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"media-service/internal/domain"
-	"media-service/internal/storage"
+	"github.com/onix-fun/media-service/internal/domain"
+	"github.com/onix-fun/media-service/internal/storage"
 
 	minioClient "github.com/minio/minio-go/v7"
 )
@@ -95,4 +95,9 @@ func (s *blobStorage) GetPresignedDownloadURL(ctx context.Context, key string, e
 		return "", err
 	}
 	return u.String(), nil
+}
+
+func (s *blobStorage) PutBlob(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+	_, err := s.client.PutObject(ctx, s.bucket, key, reader, size, minioClient.PutObjectOptions{ContentType: contentType})
+	return err
 }

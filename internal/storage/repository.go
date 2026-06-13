@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"media-service/internal/domain"
+	"github.com/onix-fun/media-service/internal/domain"
 
 	"github.com/google/uuid"
 )
@@ -18,6 +18,8 @@ type MetadataRepo interface {
 	UpdateBlob(ctx context.Context, blob *domain.Blob) error
 	GrantBlobAccess(ctx context.Context, blobID uuid.UUID, ownerKey string) error
 	HasBlobAccess(ctx context.Context, blobID uuid.UUID, ownerKey string) (bool, error)
+	CreateReference(ctx context.Context, blobID uuid.UUID, ownerKey, referenceType, referenceID string) error
+	DeleteReference(ctx context.Context, blobID uuid.UUID, ownerKey, referenceType, referenceID string) error
 
 	CreateUploadSession(ctx context.Context, session *domain.UploadSession) error
 	GetUploadSession(ctx context.Context, id uuid.UUID) (*domain.UploadSession, error)
@@ -47,4 +49,5 @@ type BlobStorage interface {
 	CopyBlob(ctx context.Context, srcKey, dstKey string) error
 	DeleteBlob(ctx context.Context, key string) error
 	GetPresignedDownloadURL(ctx context.Context, key string, expiry time.Duration) (string, error)
+	PutBlob(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
 }

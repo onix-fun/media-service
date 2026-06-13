@@ -1,0 +1,52 @@
+service:
+  http_addr: ":8080"
+  api_key: "${MEDIA_API_KEY}"
+database:
+  url: "${MEDIA_DATABASE_URL}"
+  auto_migrate: true
+  migration_path: file://migrations
+s3:
+  endpoint: minio:9000
+  public_endpoint: localhost:8080
+  access_key: "${S3_ACCESS_KEY}"
+  secret_key: "${S3_SECRET_KEY}"
+  bucket: media-blobs
+  region: us-east-1
+  use_ssl: false
+  public_use_ssl: false
+rabbitmq:
+  url: "${MEDIA_RABBITMQ_URL}"
+  jobs_exchange: media.jobs
+  jobs_queue: media.jobs.queue
+  jobs_routing_key: media.jobs.v1
+  events_exchange: media.events
+  dlq_exchange: media.dlq
+  dlq_queue: media.dlq.queue
+  prefetch: 10
+  max_retries: 5
+uploads:
+  upload_expiry: 24h
+  download_expiry: 1h
+  max_size: 10737418240
+  max_parts: 10000
+gc:
+  interval: 10m
+  grace_period: 24h
+scanning:
+  enabled: false
+  clamav_address: clamav:3310
+profiles:
+  thumbnail:
+    kind: image
+    mime: [image/jpeg, image/png, image/webp]
+    output_extension: .webp
+    output_mime: image/webp
+    automatic: true
+    command: [vipsthumbnail, "{input}", --size, 512x512, -o, "{output}"]
+  preview:
+    kind: video
+    mime: [video/mp4, video/webm]
+    output_extension: .jpg
+    output_mime: image/jpeg
+    automatic: false
+    command: [ffmpeg, -i, "{input}", -frames:v, "1", "{output}"]

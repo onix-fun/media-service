@@ -53,6 +53,7 @@ CREATE TABLE blob_references (
 );
 
 CREATE INDEX idx_blob_references_blob_id ON blob_references(blob_id);
+CREATE UNIQUE INDEX idx_blob_references_unique ON blob_references(blob_id, service_name, entity_type, entity_id);
 
 CREATE TABLE blob_relations (
     source_blob_id UUID NOT NULL REFERENCES blobs(id),

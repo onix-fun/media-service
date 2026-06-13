@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"media-service/internal/domain"
-	"media-service/internal/storage"
+	"github.com/onix-fun/media-service/internal/domain"
+	"github.com/onix-fun/media-service/internal/storage"
 )
 
 type Worker struct {

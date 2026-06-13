@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"media-service/internal/domain"
-	"media-service/internal/storage"
+	"github.com/onix-fun/media-service/internal/domain"
+	"github.com/onix-fun/media-service/internal/storage"
 
 	"github.com/google/uuid"
 )
@@ -20,21 +20,51 @@ type Service interface {
 	GetSession(ctx context.Context, sessionID uuid.UUID, createdBy string) (*domain.UploadSession, error)
 	GetDownloadURL(ctx context.Context, blobID uuid.UUID, createdBy string) (string, error)
 	DeleteBlob(ctx context.Context, blobID uuid.UUID, createdBy string) error
+	CreateReference(ctx context.Context, blobID uuid.UUID, createdBy, referenceType, referenceID string) error
+	DeleteReference(ctx context.Context, blobID uuid.UUID, createdBy, referenceType, referenceID string) error
+	StartProcessing(ctx context.Context, blobID uuid.UUID, createdBy, profile string) error
+}
+
+func (s *service) CreateReference(ctx context.Context, blobID uuid.UUID, createdBy, referenceType, referenceID string) error {
+	if referenceType == "" || referenceID == "" {
+		return fmt.Errorf("reference_type and reference_id are required")
+	}
+	return s.metadata.CreateReference(ctx, blobID, createdBy, referenceType, referenceID)
+}
+
+func (s *service) DeleteReference(ctx context.Context, blobID uuid.UUID, createdBy, referenceType, referenceID string) error {
+	return s.metadata.DeleteReference(ctx, blobID, createdBy, referenceType, referenceID)
 }
 
 type service struct {
 	metadata                storage.MetadataRepo
 	storage                 storage.BlobStorage
-	hashChan                chan<- uuid.UUID
+	jobs                    JobPublisher
 	presignedUploadExpiry   time.Duration
 	presignedDownloadExpiry time.Duration
 }
 
-func NewService(metadata storage.MetadataRepo, s storage.BlobStorage, hashChan chan<- uuid.UUID, presignedUploadExpiry, presignedDownloadExpiry time.Duration) Service {
+type JobPublisher interface {
+	PublishHash(context.Context, uuid.UUID) error
+	PublishProcess(context.Context, uuid.UUID, string) error
+}
+
+func (s *service) StartProcessing(ctx context.Context, blobID uuid.UUID, createdBy, profile string) error {
+	blob, err := s.metadata.GetBlob(ctx, blobID)
+	if err != nil || blob == nil {
+		return fmt.Errorf("blob not found")
+	}
+	if blob.CreatedByService != createdBy {
+		return fmt.Errorf("blob is not owned by caller")
+	}
+	return s.jobs.PublishProcess(ctx, blobID, profile)
+}
+
+func NewService(metadata storage.MetadataRepo, s storage.BlobStorage, jobs JobPublisher, presignedUploadExpiry, presignedDownloadExpiry time.Duration) Service {
 	return &service{
 		metadata:                metadata,
 		storage:                 s,
-		hashChan:                hashChan,
+		jobs:                    jobs,
 		presignedUploadExpiry:   presignedUploadExpiry,
 		presignedDownloadExpiry: presignedDownloadExpiry,
 	}
@@ -134,14 +164,9 @@ func (s *service) CompleteUpload(ctx context.Context, sessionID uuid.UUID, parts
 	}
 
 	// 5. Trigger Async Hashing & Dedup Pipeline
-	select {
-	case s.hashChan <- session.ID:
-		// Message sent
-	default:
-		// Queue is full - this should ideally be persistent (e.g. NATS)
-		// For the sake of the initial version, we use an in-memory channel.
+	if err := s.jobs.PublishHash(ctx, session.ID); err != nil {
+		return fmt.Errorf("enqueue hash job: %w", err)
 	}
-
 	return nil
 }
 

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"media-service/internal/domain"
-	"media-service/internal/upload"
+	"github.com/onix-fun/media-service/internal/domain"
+	"github.com/onix-fun/media-service/internal/upload"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -64,15 +64,67 @@ func NewRouter(h *Handlers, internalAuthSecret string) *chi.Mux {
 	r.Route("/blobs", func(r chi.Router) {
 		r.Get("/{blobId}/download-url", h.GetDownloadURL)
 		r.Delete("/{blobId}", h.DeleteBlob)
+		r.Post("/{blobId}/references", h.CreateReference)
+		r.Delete("/{blobId}/references/{referenceType}/{referenceId}", h.DeleteReference)
+		r.Post("/{blobId}/processing/{profile}", h.StartProcessing)
 	})
 
 	return r
 }
 
+func (h *Handlers) StartProcessing(w http.ResponseWriter, r *http.Request) {
+	blobID, err := uuid.Parse(chi.URLParam(r, "blobId"))
+	if err != nil {
+		http.Error(w, "invalid blob ID", 400)
+		return
+	}
+	if err := h.uploadService.StartProcessing(r.Context(), blobID, callerIdentity(r), chi.URLParam(r, "profile")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+type ReferenceRequest struct {
+	ReferenceType string `json:"reference_type"`
+	ReferenceID   string `json:"reference_id"`
+}
+
+func (h *Handlers) CreateReference(w http.ResponseWriter, r *http.Request) {
+	blobID, err := uuid.Parse(chi.URLParam(r, "blobId"))
+	if err != nil {
+		http.Error(w, "invalid blob ID", 400)
+		return
+	}
+	var req ReferenceRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	if err := h.uploadService.CreateReference(r.Context(), blobID, callerIdentity(r), req.ReferenceType, req.ReferenceID); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) DeleteReference(w http.ResponseWriter, r *http.Request) {
+	blobID, err := uuid.Parse(chi.URLParam(r, "blobId"))
+	if err != nil {
+		http.Error(w, "invalid blob ID", 400)
+		return
+	}
+	if err := h.uploadService.DeleteReference(r.Context(), blobID, callerIdentity(r), chi.URLParam(r, "referenceType"), chi.URLParam(r, "referenceId")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func requireInternalAuth(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			provided := r.Header.Get("X-Internal-Auth")
+			provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if secret == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return

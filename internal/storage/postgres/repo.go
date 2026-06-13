@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"media-service/internal/domain"
-	"media-service/internal/storage"
+	"github.com/onix-fun/media-service/internal/domain"
+	"github.com/onix-fun/media-service/internal/storage"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -101,6 +101,25 @@ func (r *metadataRepo) HasBlobAccess(ctx context.Context, blobID uuid.UUID, owne
 		SELECT EXISTS(SELECT 1 FROM blob_access WHERE blob_id = $1 AND owner_key = $2)
 	`, blobID, ownerKey).Scan(&allowed)
 	return allowed, err
+}
+
+func (r *metadataRepo) CreateReference(ctx context.Context, blobID uuid.UUID, ownerKey, referenceType, referenceID string) error {
+	_, err := r.pool.Exec(ctx, `WITH inserted AS (
+		INSERT INTO blob_references(id,blob_id,service_name,entity_type,entity_id)
+		VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING
+	) UPDATE blobs SET retention_state='REFERENCED',updated_at=NOW() WHERE id=$2`,
+		uuid.Must(uuid.NewV7()), blobID, ownerKey, referenceType, referenceID)
+	return err
+}
+
+func (r *metadataRepo) DeleteReference(ctx context.Context, blobID uuid.UUID, ownerKey, referenceType, referenceID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM blob_references WHERE blob_id=$1 AND service_name=$2 AND entity_type=$3 AND entity_id=$4`, blobID, ownerKey, referenceType, referenceID)
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, `UPDATE blobs SET retention_state='PENDING_REFERENCE',updated_at=NOW()
+		WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM blob_references WHERE blob_id=$1)`, blobID)
+	return err
 }
 
 func (r *metadataRepo) CreateUploadSession(ctx context.Context, session *domain.UploadSession) error {
