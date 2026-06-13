@@ -17,13 +17,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: media-service/go.mod
-          cache-dependency-path: media-service/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Run tests
-        working-directory: media-service
         run: go test ./...
       - name: Run vet
-        working-directory: media-service
         run: go vet ./...
 
   build-and-push:
@@ -57,7 +55,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: media-service
+          context: .
           push: true
-          tags: ${{ id.meta.outputs.tags }}
-          labels: ${{ id.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
