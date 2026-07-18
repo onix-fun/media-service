@@ -1,4 +1,4 @@
-.PHONY: build run swagger docker-up docker-down migrate-up migrate-down dev test
+.PHONY: generate build run docker-up docker-down migrate-up migrate-down dev test
 
 # Load .env file if it exists
 ifneq (,$(wildcard ./.env))
@@ -8,15 +8,16 @@ endif
 
 DATABASE_URL ?= postgres://postgres:password@localhost:5432/media?sslmode=disable
 
-build: swagger
-	go build -o bin/media-service cmd/media-service/main.go
+generate:
+	protoc -I api/proto --go_out=. --go_opt=module=github.com/onix-fun/media \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/onix-fun/media \
+		api/proto/onix/media/media.proto
+
+build:
+	go build -o bin/media cmd/media/main.go
 
 run: build
-	./bin/media-service
-
-swagger:
-	go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/media-service/main.go --parseDependency --parseInternal -o docs
-	cp docs/swagger.json docs/openapi.json
+	./bin/media
 
 docker-up:
 	docker-compose up -d
@@ -31,7 +32,10 @@ migrate-up:
 migrate-down:
 	migrate -path migrations -database "$(DATABASE_URL)" down -all
 
-dev: docker-up swagger run
+dev: docker-up run
 
 test:
-	python3 tests/test_e2e.py
+	go test ./...
+
+race:
+	go test -race ./...

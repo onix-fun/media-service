@@ -43,6 +43,9 @@ tmp/
 temp/
 coverage.out
 c.out
+.contracts/
+/media-service
+/bin/
 
 # Docker/Local volumes (if any local bind mounts are used in the future)
 /data/

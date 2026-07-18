@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package onix.media;
+
+option java_multiple_files = true;
+option java_package = "com.onix.media.contract";
+option go_package = "github.com/onix-fun/media/internal/gen/media;mediapb";
+
+service MediaService {
+  rpc BeginAssetUpload(BeginAssetUploadRequest) returns (BeginAssetUploadResponse);
+  rpc CompleteAssetUpload(CompleteAssetUploadRequest) returns (AssetSourceResponse);
+  rpc GetAssetSource(GetAssetSourceRequest) returns (AssetSourceResponse);
+  rpc BatchGetAssetSources(BatchGetAssetSourcesRequest) returns (BatchGetAssetSourcesResponse);
+  rpc RequestProcessing(RequestProcessingRequest) returns (ProcessingRunResponse);
+  rpc GetProcessingRun(GetProcessingRunRequest) returns (ProcessingRunResponse);
+  rpc BatchGetProcessingRuns(BatchGetProcessingRunsRequest) returns (BatchGetProcessingRunsResponse);
+  rpc RetryProcessing(RetryProcessingRequest) returns (ProcessingRunResponse);
+  rpc CancelProcessing(CancelProcessingRequest) returns (ProcessingRunResponse);
+  rpc GetDeliveryManifest(GetDeliveryManifestRequest) returns (DeliveryManifestResponse);
+  rpc ResolveDelivery(ResolveDeliveryRequest) returns (ResolveDeliveryResponse);
+  rpc ResolveSource(ResolveSourceRequest) returns (ResolveDeliveryResponse);
+  rpc ReleaseSource(ReleaseSourceRequest) returns (ReleaseSourceResponse);
+  rpc ListLifecycleEvents(ListLifecycleEventsRequest) returns (ListLifecycleEventsResponse);
+}
+
+enum MediaKind {
+  MEDIA_KIND_UNSPECIFIED = 0;
+  MEDIA_KIND_IMAGE = 1;
+  MEDIA_KIND_VIDEO = 2;
+  MEDIA_KIND_AUDIO = 3;
+}
+
+enum SourceStatus {
+  SOURCE_STATUS_UNSPECIFIED = 0;
+  SOURCE_STATUS_UPLOADING = 1;
+  SOURCE_STATUS_VERIFYING = 2;
+  SOURCE_STATUS_AVAILABLE = 3;
+  SOURCE_STATUS_REJECTED = 4;
+}
+
+enum ProcessingStatus {
+  PROCESSING_STATUS_UNSPECIFIED = 0;
+  PROCESSING_STATUS_WAITING_SOURCE = 1;
+  PROCESSING_STATUS_QUEUED = 2;
+  PROCESSING_STATUS_PROCESSING = 3;
+  PROCESSING_STATUS_READY = 4;
+  PROCESSING_STATUS_FAILED = 5;
+  PROCESSING_STATUS_CANCELLED = 6;
+}
+
+message UploadPart { int32 part_number = 1; string etag = 2; }
+
+message BeginAssetUploadRequest {
+  string owner_ref = 1;
+  MediaKind declared_kind = 2;
+  string mime_type = 3;
+  int64 expected_size = 4;
+  int32 parts_count = 5;
+  string source_policy_id = 6;
+}
+
+message BeginAssetUploadResponse {
+  AssetSource source = 1;
+  string session_id = 2;
+  map<int32, string> parts = 3;
+  string expires_at = 4;
+}
+
+message CompleteAssetUploadRequest {
+  string owner_ref = 1;
+  string asset_id = 2;
+  string session_id = 3;
+  repeated UploadPart parts = 4;
+}
+
+message GetAssetSourceRequest { string owner_ref = 1; string asset_id = 2; }
+message AssetSourceResponse { AssetSource source = 1; ProcessingRun latest_run = 2; }
+message BatchGetAssetSourcesRequest { string owner_ref = 1; repeated string asset_ids = 2; }
+message BatchGetAssetSourcesResponse {
+  repeated AssetSourceResponse sources = 1;
+  repeated string missing_asset_ids = 2;
+}
+
+message AssetSource {
+  string asset_id = 1;
+  string owner_ref = 2;
+  MediaKind kind = 3;
+  SourceStatus status = 4;
+  string mime_type = 5;
+  string source_policy_id = 6;
+  string failure_code = 7;
+  int32 width = 8;
+  int32 height = 9;
+  int64 duration_ms = 10;
+}
+
+message RequestProcessingRequest {
+  string owner_ref = 1;
+  string asset_id = 2;
+  string pipeline_id = 3;
+  string idempotency_key = 4;
+}
+
+message GetProcessingRunRequest { string owner_ref = 1; string run_id = 2; }
+message BatchGetProcessingRunsRequest { string owner_ref = 1; repeated string run_ids = 2; }
+message BatchGetProcessingRunsResponse { repeated ProcessingRun runs = 1; }
+message RetryProcessingRequest { string owner_ref = 1; string run_id = 2; string idempotency_key = 3; }
+message CancelProcessingRequest { string owner_ref = 1; string run_id = 2; }
+message ProcessingRunResponse { ProcessingRun run = 1; }
+
+message ProcessingRun {
+  string run_id = 1;
+  string asset_id = 2;
+  string pipeline_id = 3;
+  string pipeline_version = 4;
+  int64 generation = 5;
+  ProcessingStatus status = 6;
+  string failure_code = 7;
+}
+
+message GetDeliveryManifestRequest { string owner_ref = 1; string asset_id = 2; int64 generation = 3; }
+message DeliveryManifestResponse { DeliveryManifest manifest = 1; }
+message DeliveryManifest { string asset_id = 1; int64 generation = 2; repeated DeliveryVariant variants = 3; }
+message DeliveryVariant {
+  string name = 1;
+  string mime_type = 2;
+  int32 width = 3;
+  int32 height = 4;
+  int64 duration_ms = 5;
+  int64 bitrate = 6;
+  bool ready = 7;
+}
+
+message ResolveDeliveryRequest { string owner_ref = 1; string asset_id = 2; int64 generation = 3; string variant_name = 4; }
+message ResolveSourceRequest { string owner_ref = 1; string asset_id = 2; }
+message ResolveDeliveryResponse { string url = 1; string mime_type = 2; }
+message ReleaseSourceRequest { string owner_ref = 1; string asset_id = 2; int64 generation = 3; }
+message ReleaseSourceResponse { bool released = 1; }
+
+message ListLifecycleEventsRequest { int64 after_sequence = 1; int32 limit = 2; }
+message LifecycleEvent {
+  int64 sequence = 1;
+  string event_id = 2;
+  string type = 3;
+  string asset_id = 4;
+  string run_id = 5;
+  int64 generation = 6;
+  string owner_ref = 7;
+  string failure_code = 8;
+  string created_at = 9;
+}
+message ListLifecycleEventsResponse { repeated LifecycleEvent events = 1; }

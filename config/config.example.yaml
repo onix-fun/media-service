@@ -1,29 +1,29 @@
 service:
   http_addr: ":8080"
+  grpc_addr: ":9093"
   api_key: "${MEDIA_API_KEY}"
+  grpc_tls: false
 database:
   url: "${MEDIA_DATABASE_URL}"
   auto_migrate: true
   migration_path: file://migrations
 s3:
   endpoint: minio:9000
-  public_endpoint: localhost:8080
+  # Browser multipart PUT URLs are signed against this address. It must be
+  # publicly reachable and must preserve the exact signed Host header. A
+  # directly published MinIO port is the safest local-development option.
+  public_endpoint: localhost:9010
   access_key: "${S3_ACCESS_KEY}"
   secret_key: "${S3_SECRET_KEY}"
   bucket: media-blobs
   region: us-east-1
   use_ssl: false
   public_use_ssl: false
-rabbitmq:
-  url: "${MEDIA_RABBITMQ_URL}"
-  jobs_exchange: media.jobs
-  jobs_queue: media.jobs.queue
-  jobs_routing_key: media.jobs.v1
-  events_exchange: media.events
-  dlq_exchange: media.dlq
-  dlq_queue: media.dlq.queue
-  prefetch: 10
-  max_retries: 5
+jobs:
+  poll_interval: 1s
+  lease_duration: 2m
+  batch_size: 10
+  max_retries: 2
 uploads:
   upload_expiry: 24h
   download_expiry: 1h
@@ -35,6 +35,9 @@ gc:
 scanning:
   enabled: false
   clamav_address: clamav:3310
+service_aliases:
+  content:
+    - content
 profiles:
   thumbnail:
     kind: image

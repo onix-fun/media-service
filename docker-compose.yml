@@ -41,7 +41,7 @@ services:
       /bin/sh -c "
       /usr/bin/mc config host add myminio http://minio:9000 minioadmin minioadmin;
       /usr/bin/mc mb myminio/media-blobs --ignore-existing;
-      /usr/bin/mc anonymous set download myminio/media-blobs;
+      /usr/bin/mc anonymous set none myminio/media-blobs;
       exit 0;
       "
 
